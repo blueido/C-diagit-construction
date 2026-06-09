@@ -52,7 +52,7 @@ my_memory_pool::my_memory_pool(void* pool_start, size_t total_size) {
 	blockDataStartAddress = blockInfoStartAddress + blockCount * sizeof(my_memory_block);
 	for (size_t i = 0; i < blockCount; ++i) {
 		memoryBlocks[i].dataAddress = (void*)(blockDataStartAddress + i * g_pageSize);
-		memoryBlocks[i].sizeType = 64 * 2 ^ i;
+		memoryBlocks[i].sizeType = 64 * (1 << i); //64,128,256,512,1024,2048,4096
 		memoryBlocks[i].isFinished = false;
 		memoryBlocks[i].blockCount = 1;
 		if (!spilteBlock(&memoryBlocks[i], memoryBlocks[i].sizeType)) {
@@ -67,12 +67,14 @@ bool my_memory_pool::spilteBlock(my_memory_block* memoryBlock, size_t sizeType){
 	{
 		return false;
 	}
+	//剩余的内存不足以分割出一个sizeType大小的块内存，则不进行分割
 	size_t blockCount = g_pageSize / sizeType;
+	memoryBlock->blockCount = blockCount;
 	for (size_t i = 0; i < blockCount; ++i) {
-		memoryBlock->childBlocks[i].dataAddress = (void*)((my_memory_block*)memoryBlock->dataAddress + i * sizeType);
+		memoryBlock->childBlocks[i].dataAddress = (void*)((char*)memoryBlock->dataAddress + i * sizeType);
 		memoryBlock->childBlocks[i].sizeType = sizeType;
 		memoryBlock->childBlocks[i].isFinished = false;
-		memoryBlock->childBlocks[i].blockCount = blockCount;
+		memoryBlock->childBlocks[i].blockCount = 1;
 		memoryBlock->childBlocks[i].childBlocks = {};
 	}
 	return true;
@@ -87,19 +89,22 @@ void* my_memory_pool::myMalloc(size_t requestSize) {
 	//find a suitable block
 	for (size_t i = 0; i < blockCount; ++i) {
 		if (memoryBlocks[i].sizeType >= requestSize) {
-			if (memoryBlocks[i].isFinished || memoryBlocks[i].childBlocks.empty()) {
+			if (memoryBlocks[i].isFinished || memoryBlocks[i].blockCount == 0 || memoryBlocks[i].childBlocks.empty()) {
 				std::cerr << "current memory block of size " << memoryBlocks[i].sizeType << " is fully allocated, try next block" << std::endl;
 				continue;
 			}
 			else{
 				for (size_t j = 0; j < memoryBlocks[i].childBlocks.size(); ++j) {
-					if (memoryBlocks[i].childBlocks[j].blockCount && memoryBlocks[i].childBlocks[j].sizeType >= requestSize) {
-						memoryBlocks[i].childBlocks[j].blockCount -= 1;
-						if (memoryBlocks[i].childBlocks[j].blockCount == 0) {
-							memoryBlocks[i].childBlocks[j].isFinished = true;
+				    if (memoryBlocks[i].childBlocks[j].blockCount && memoryBlocks[i].childBlocks[j].sizeType >= requestSize) {
+				    	memoryBlocks[i].childBlocks[j].blockCount -= 1;
+						memoryBlocks[i].blockCount -= 1;
+				    	if (memoryBlocks[i].childBlocks[j].blockCount == 0) {
+				    		memoryBlocks[i].childBlocks[j].isFinished = true;
+				    	}
+						if (memoryBlocks[i].blockCount == 0) {
 							memoryBlocks[i].isFinished = true;
 						}
-						return memoryBlocks[i].childBlocks[j].dataAddress;
+				    	return memoryBlocks[i].childBlocks[j].dataAddress;
 					}
 				}
 			}
@@ -120,9 +125,9 @@ bool my_memory_pool::myFree(void* ptr){
 		for (int j = 0; j < memoryBlocks[i].childBlocks.size(); ++j) {
 			if (memoryBlocks[i].childBlocks[j].dataAddress == ptr) {
 				memset(memoryBlocks[i].childBlocks[j].dataAddress, 0, memoryBlocks[i].childBlocks[j].sizeType);
-				ptr = nullptr;
 				memoryBlocks[i].childBlocks[j].blockCount += 1;
 				memoryBlocks[i].childBlocks[j].isFinished = false;
+				memoryBlocks[i].blockCount += 1;
 				memoryBlocks[i].isFinished = false;
 				return true;
 			}
